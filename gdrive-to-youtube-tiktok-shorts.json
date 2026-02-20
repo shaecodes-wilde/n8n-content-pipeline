@@ -1,0 +1,353 @@
+﻿{
+  "name": "AI ASMR: Drive to YouTube Shorts + TikTok",
+  "nodes": [
+    {
+      "parameters": {
+        "authentication": "oAuth2",
+        "triggerOn": "specificFolder",
+        "folderToWatch": {
+          "__rl": true,
+          "value": "REPLACE_WITH_GOOGLE_DRIVE_FOLDER_ID",
+          "mode": "id"
+        },
+        "event": "fileCreated",
+        "options": {}
+      },
+      "id": "13d5bff9-6b9f-4db3-aafa-9f7493641144",
+      "name": "Google Drive Trigger",
+      "type": "n8n-nodes-base.googleDriveTrigger",
+      "typeVersion": 1,
+      "position": [220, 320]
+    },
+    {
+      "parameters": {
+        "jsCode": "const DEFAULT_TIKTOK_PRIVACY = 'PUBLIC_TO_EVERYONE';\nconst DEFAULT_YT_REGION = 'US';\nconst DEFAULT_YT_CATEGORY = '22';\n\nreturn $input.all()\n  .filter((item) => {\n    const mimeType = item.json.mimeType ?? '';\n    const size = Number(item.json.size ?? 0);\n    return mimeType.startsWith('video/') && size > 0;\n  })\n  .map((item) => {\n    const originalName = item.json.name ?? 'AI ASMR Short';\n    const stem = originalName\n      .replace(/\\.[^.]+$/, '')\n      .replace(/[_-]+/g, ' ')\n      .replace(/\\s+/g, ' ')\n      .trim() || 'AI ASMR Short';\n\n    item.json.originalStem = stem;\n    item.json.youtubeRegionCode = DEFAULT_YT_REGION;\n    item.json.youtubeCategoryId = DEFAULT_YT_CATEGORY;\n    item.json.tiktokPrivacy = DEFAULT_TIKTOK_PRIVACY;\n    item.json.tiktokDisableComment = false;\n    item.json.tiktokDisableDuet = false;\n    item.json.tiktokDisableStitch = false;\n    item.json.tiktokCoverTimestampMs = 1000;\n\n    return item;\n  });"
+      },
+      "id": "bf6e7788-12b3-44b9-8ee9-eb4d31fb1f22",
+      "name": "Prepare File Context",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [460, 320]
+    },
+    {
+      "parameters": {
+        "resource": "file",
+        "operation": "download",
+        "fileId": {
+          "__rl": true,
+          "value": "={{$json.id}}",
+          "mode": "id"
+        },
+        "options": {
+          "binaryPropertyName": "videoFile"
+        }
+      },
+      "id": "596fb182-b855-467f-a5de-f2f1068ba8ef",
+      "name": "Download Video",
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [700, 320]
+    },
+    {
+      "parameters": {
+        "resource": "video",
+        "operation": "analyze",
+        "modelId": {
+          "__rl": true,
+          "value": "models/gemini-2.5-flash",
+          "mode": "id"
+        },
+        "text": "You are an ASMR short-form metadata expert. Analyze this video and reply with ONLY minified JSON (no markdown). Return keys: youtube_title (string, <=100 chars, include #shorts and #asmr naturally), youtube_description (string, concise, 1-2 sentences + hashtags), youtube_tags (array of 6-12 tag strings without #), tiktok_caption (string, <=2200 chars with ASMR hashtags), hook (string), vibe (string). Keep descriptions factual to visible/audible content.",
+        "inputType": "binary",
+        "binaryPropertyName": "videoFile",
+        "simplify": true,
+        "options": {
+          "maxOutputTokens": 700
+        }
+      },
+      "id": "9fcb00f4-4f17-4f8d-9023-a1324bdf58b8",
+      "name": "Gemini Analyze Video",
+      "type": "@n8n/n8n-nodes-langchain.googleGemini",
+      "typeVersion": 1.1,
+      "position": [940, 120]
+    },
+    {
+      "parameters": {
+        "jsCode": "const extractText = (item) => {\n  const parts = item.json.content?.parts;\n  if (!Array.isArray(parts)) return '';\n  for (const part of parts) {\n    if (typeof part?.text === 'string' && part.text.trim()) return part.text.trim();\n  }\n  return '';\n};\n\nconst stripCodeFences = (text) => text\n  .replace(/^```(?:json)?\\s*/i, '')\n  .replace(/\\s*```$/i, '')\n  .trim();\n\nconst extractJsonObject = (text) => {\n  const cleaned = stripCodeFences(text);\n  const start = cleaned.indexOf('{');\n  const end = cleaned.lastIndexOf('}');\n  if (start === -1 || end === -1 || end <= start) return null;\n  return cleaned.slice(start, end + 1);\n};\n\nreturn $input.all().map((item) => {\n  const modelText = extractText(item);\n  const jsonCandidate = extractJsonObject(modelText);\n  let parsed = {};\n\n  if (jsonCandidate) {\n    try {\n      parsed = JSON.parse(jsonCandidate);\n    } catch {}\n  }\n\n  const tagsValue = parsed.youtube_tags;\n  const normalizedTags = Array.isArray(tagsValue)\n    ? tagsValue.map((tag) => String(tag).trim()).filter(Boolean)\n    : typeof tagsValue === 'string'\n      ? tagsValue.split(',').map((tag) => tag.trim()).filter(Boolean)\n      : [];\n\n  item.json = {\n    aiRawText: modelText,\n    aiYoutubeTitle: typeof parsed.youtube_title === 'string' ? parsed.youtube_title.trim() : '',\n    aiYoutubeDescription: typeof parsed.youtube_description === 'string' ? parsed.youtube_description.trim() : '',\n    aiYoutubeTags: normalizedTags,\n    aiTiktokCaption: typeof parsed.tiktok_caption === 'string' ? parsed.tiktok_caption.trim() : '',\n    aiHook: typeof parsed.hook === 'string' ? parsed.hook.trim() : '',\n    aiVibe: typeof parsed.vibe === 'string' ? parsed.vibe.trim() : ''\n  };\n\n  return item;\n});"
+      },
+      "id": "eb3f4d91-93f7-4077-8e60-fdf302939a84",
+      "name": "Parse Gemini Metadata",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1180, 120]
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combineBy": "combineByPosition",
+        "numberInputs": 2,
+        "options": {
+          "clashHandling": {
+            "values": {
+              "resolveClash": "preferLast",
+              "mergeMode": "deepMerge",
+              "overrideEmpty": false
+            }
+          }
+        }
+      },
+      "id": "28e423ea-6df0-42b5-b66a-a7fe4bc98790",
+      "name": "Merge AI + File Context",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [1420, 320]
+    },
+    {
+      "parameters": {
+        "jsCode": "const YT_HASHTAGS = '#shorts #asmr';\nconst TT_HASHTAGS = '#asmr #satisfying #oddlysatisfying';\nconst DEFAULT_YT_TAGS = ['asmr', 'shorts', 'ai asmr', 'satisfying', 'relaxing sounds', 'oddly satisfying'];\nconst DEFAULT_YT_REGION = 'US';\nconst DEFAULT_YT_CATEGORY = '22';\nconst DEFAULT_TIKTOK_PRIVACY = 'PUBLIC_TO_EVERYONE';\n\nconst sanitize = (value) => (typeof value === 'string' ? value.replace(/\\s+/g, ' ').trim() : '');\n\nconst stemFromName = (name) => {\n  const raw = String(name ?? 'AI ASMR Short');\n  const stem = raw\n    .replace(/\\.[^.]+$/, '')\n    .replace(/[_-]+/g, ' ')\n    .replace(/\\s+/g, ' ')\n    .trim();\n  return stem || 'AI ASMR Short';\n};\n\nconst toTagArray = (value) => {\n  if (Array.isArray(value)) {\n    return value.map((v) => sanitize(String(v)).replace(/^#/, '')).filter(Boolean);\n  }\n  if (typeof value === 'string') {\n    return value\n      .split(',')\n      .map((v) => sanitize(v).replace(/^#/, ''))\n      .filter(Boolean);\n  }\n  return [];\n};\n\nreturn $input.all().map((item) => {\n  const stem = sanitize(item.json.originalStem) || stemFromName(item.json.name);\n  const aiTitle = sanitize(item.json.aiYoutubeTitle);\n  const aiDescription = sanitize(item.json.aiYoutubeDescription);\n  const aiCaption = sanitize(item.json.aiTiktokCaption);\n\n  const aiTags = toTagArray(item.json.aiYoutubeTags);\n  const finalTags = (aiTags.length ? aiTags : DEFAULT_YT_TAGS).slice(0, 15);\n\n  const fallbackYtTitle = `${stem} ${YT_HASHTAGS}`.trim();\n  const fallbackYtDescription = `${stem}\\n\\n#asmr #shorts`;\n  const fallbackTtCaption = `${stem} ${TT_HASHTAGS}`.trim();\n\n  item.json.youtubeTitle = (aiTitle || fallbackYtTitle).slice(0, 100);\n  item.json.youtubeDescription = (aiDescription || fallbackYtDescription).slice(0, 5000);\n  item.json.youtubeTags = finalTags.join(',');\n  item.json.youtubeRegionCode = sanitize(item.json.youtubeRegionCode) || DEFAULT_YT_REGION;\n  item.json.youtubeCategoryId = sanitize(item.json.youtubeCategoryId) || DEFAULT_YT_CATEGORY;\n\n  item.json.tiktokTitle = (aiCaption || fallbackTtCaption).slice(0, 2200);\n  item.json.tiktokPrivacy = sanitize(item.json.tiktokPrivacy) || DEFAULT_TIKTOK_PRIVACY;\n  item.json.tiktokDisableComment = Boolean(item.json.tiktokDisableComment);\n  item.json.tiktokDisableDuet = Boolean(item.json.tiktokDisableDuet);\n  item.json.tiktokDisableStitch = Boolean(item.json.tiktokDisableStitch);\n  item.json.tiktokCoverTimestampMs = Number(item.json.tiktokCoverTimestampMs || 1000);\n\n  return item;\n});"
+      },
+      "id": "4a8e01ec-7dd5-4615-a9a8-33741de51950",
+      "name": "Finalize Metadata",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1660, 320]
+    },
+    {
+      "parameters": {
+        "resource": "video",
+        "operation": "upload",
+        "title": "={{$json.youtubeTitle}}",
+        "regionCode": "={{$json.youtubeRegionCode}}",
+        "categoryId": "={{$json.youtubeCategoryId}}",
+        "binaryProperty": "videoFile",
+        "options": {
+          "description": "={{$json.youtubeDescription}}",
+          "tags": "={{$json.youtubeTags}}",
+          "privacyStatus": "public",
+          "notifySubscribers": false,
+          "selfDeclaredMadeForKids": false
+        }
+      },
+      "id": "efcbfbb5-3e57-4f84-b6d4-58e7533f3e76",
+      "name": "Upload Short to YouTube",
+      "type": "n8n-nodes-base.youTube",
+      "typeVersion": 1,
+      "position": [1920, 140]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://open.tiktokapis.com/v2/post/publish/video/init/",
+        "authentication": "none",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "={{ 'Bearer ' + $env.TIKTOK_ACCESS_TOKEN }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ { post_info: { title: $json.tiktokTitle, privacy_level: $json.tiktokPrivacy, disable_comment: $json.tiktokDisableComment, disable_duet: $json.tiktokDisableDuet, disable_stitch: $json.tiktokDisableStitch, video_cover_timestamp_ms: $json.tiktokCoverTimestampMs }, source_info: { source: 'FILE_UPLOAD', video_size: Number($json.size), chunk_size: Number($json.size), total_chunk_count: 1 } } }}",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "id": "58e950fc-d38d-41cc-a16f-2f3604bd257a",
+      "name": "TikTok Init Upload",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [1920, 500]
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combineBy": "combineByPosition",
+        "numberInputs": 2,
+        "options": {
+          "clashHandling": {
+            "values": {
+              "resolveClash": "preferLast",
+              "mergeMode": "deepMerge",
+              "overrideEmpty": false
+            }
+          }
+        }
+      },
+      "id": "f7490d73-24b5-4832-b707-d8a56102208c",
+      "name": "Merge TikTok Context",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [2160, 320]
+    },
+    {
+      "parameters": {
+        "method": "PUT",
+        "url": "={{$json.data.upload_url}}",
+        "authentication": "none",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Range",
+              "value": "={{ 'bytes 0-' + (Number($json.size) - 1) + '/' + Number($json.size) }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "={{$binary.videoFile.mimeType || 'video/mp4'}}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "binaryData",
+        "inputDataFieldName": "videoFile",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true,
+              "responseFormat": "text"
+            }
+          }
+        }
+      },
+      "id": "ee75f097-5945-4f50-a29c-cabbfc1379b2",
+      "name": "TikTok Upload Binary",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [2400, 320]
+    }
+  ],
+  "connections": {
+    "Google Drive Trigger": {
+      "main": [
+        [
+          {
+            "node": "Prepare File Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare File Context": {
+      "main": [
+        [
+          {
+            "node": "Download Video",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Download Video": {
+      "main": [
+        [
+          {
+            "node": "Gemini Analyze Video",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Merge AI + File Context",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Gemini Analyze Video": {
+      "main": [
+        [
+          {
+            "node": "Parse Gemini Metadata",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Gemini Metadata": {
+      "main": [
+        [
+          {
+            "node": "Merge AI + File Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge AI + File Context": {
+      "main": [
+        [
+          {
+            "node": "Finalize Metadata",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Finalize Metadata": {
+      "main": [
+        [
+          {
+            "node": "Upload Short to YouTube",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "TikTok Init Upload",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Merge TikTok Context",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "TikTok Init Upload": {
+      "main": [
+        [
+          {
+            "node": "Merge TikTok Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge TikTok Context": {
+      "main": [
+        [
+          {
+            "node": "TikTok Upload Binary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "d30f55dc-5922-4b5f-98ef-81ef6f1384c1",
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "tags": []
+}
