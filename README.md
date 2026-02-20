@@ -1,4 +1,4 @@
-# n8n ASMR Content Pipeline
+# n8n Content Pipeline
 
 > Watches a Google Drive folder for new video files, uses Gemini AI to analyze the content and auto-generate optimized metadata, then publishes simultaneously to YouTube Shorts and TikTok.
 
